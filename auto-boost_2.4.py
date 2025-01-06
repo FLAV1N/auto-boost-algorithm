@@ -11,7 +11,7 @@ import vapoursynth as vs
 core = vs.core
 
 if "--help" in sys.argv[1:]:
-    print('Usage:\npython auto-boost_2.0.py "{animu.mkv}" {base CQ/CRF/Q}"\n\nExample:\npython "auto-boost_2.0.py" "path/to/nice_boat.mkv" 30 6 2 6 0 3 60')
+    print('Usage:\npython auto-boost_2.4.py "{animu.mkv}" {base CQ/CRF/Q}"\n\nExample:\npython "auto-boost_2.4.py" "path/to/nice_boat.mkv" 30 6 2 6 0 3 60')
     exit(0)
 else:
     pass
@@ -34,28 +34,11 @@ def calc_grainsynth_of_scene(
     chunk_end,
     src,
     encoder_max_grain=50,
-    scale_vf="",
-    crop_vf="",
 ) -> int:
-    filter_vec = []
-    if crop_vf:
-        filter_vec.append(f"crop={crop_vf}")
-
-    if scale_vf:
-        filter_vec.append(f"scale={scale_vf}:flags=lanczos")
-
-    denoise_weak = f"format=pix_fmts=yuv420p,hwupload,nlmeans_opencl=s=1.8:p=7:r=9,hwdownload,format=pix_fmts=yuv420p"
-    denoise_strong = f"format=pix_fmts=yuv420p,hwupload,nlmeans_opencl=s=4:p=5:r=15,hwdownload,format=pix_fmts=yuv420p"
-
-    filters_ref = filter_vec
-    filters_weak = filter_vec + [denoise_weak]
-    # filters_weak = f" -vf {filters_weak}"
-    filters_strong = filter_vec + [denoise_strong]
-    # filters_strong = f" -vf {filters_strong}"
 
     gs = []
     frame_count = chunk_end - chunk_start
-    loop_count = int((5 + sqrt(frame_count / 5)) / 2)
+    loop_count = int((5 + sqrt(frame_count / 5)) / 2)  # Ensure at least one loop
 
     for i in range(loop_count):
         curr_frame = chunk_start + int((frame_count / loop_count) * i)
@@ -63,9 +46,15 @@ def calc_grainsynth_of_scene(
         # print(f"Processing frame {curr_frame}...")
         frame_clip = src[curr_frame]
         
-        ref_size = get_size("", frame_clip)
-        weak_size = get_size(filters_weak, frame_clip)
-        strong_size = get_size(filters_strong, frame_clip)
+        # Apply weak and strong denoising
+        weak_clip = core.nlm_cuda.NLMeans(frame_clip, d=0, a=1, s=3, h=1.1, wmode=0)  # Adjust `h` for weak denoising
+        
+        strong_clip = core.nlm_cuda.NLMeans(frame_clip, d=3, a=3, s=2, h=5.2, wmode=0)  # Adjust `h` for strong denoising 
+        
+        # Compute sizes for reference, weak, and strong frames
+        ref_size = get_size(frame_clip)
+        weak_size = get_size(weak_clip)
+        strong_size = get_size(strong_clip)
 
         # Debugging Outputs
         # print(f"Frame {curr_frame}: ref_size={ref_size}, weak_size={weak_size}, strong_size={strong_size}")
@@ -96,43 +85,29 @@ def calc_grainsynth_of_scene(
     final_grain /= 100.0 / encoder_max_grain
     final_grain = int(round(final_grain))  # Use rounding to avoid truncation
     
-    if final_grain == 0:
-        final_grain = 4 
+    if final_grain <= 3:
+        final_grain = 3 
 
     # Print the final grain value
     # print(f"Chunk {chunk_start}-{chunk_end}: Calculated grain strength {final_grain}")
     return final_grain
 
-def get_size(command, clip: vs.VideoNode) -> int:
+def get_size(clip: vs.VideoNode) -> int:
     try:
         common = [
             "ffmpeg",
-            "-init_hw_device", "opencl=gpu",
-            "-filter_hw_device", "gpu",
             "-v", "error",
             "-y",
             "-f", "rawvideo",
             "-pix_fmt", "yuv420p",
             "-s", f"{clip.width}x{clip.height}",
             "-i", "pipe:",
-            "-threads", "24",
             "-frames:v", "1",
             "-pix_fmt", "yuv420p",
             "-f", "image2pipe",
-            "-c:v", "png"
+            "-c:v", "png", "-"
         ]
         
-        if isinstance(command, list):
-            command = ",".join(command)  # Join list items into a single filter string
-        elif not isinstance(command, str):
-            raise ValueError("The 'command' argument must be a string or a list of strings.")
-        # Combine common command with additional filters
-        if command.strip():
-            common.extend(["-vf", command.strip(), "-"])
-        elif not command.strip():
-            common.extend(["-"])
-        # Print the final FFmpeg command for debugging
-        # print(f"{' '.join(common)}\n")
         process = subprocess.Popen(common, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         clip.output(process.stdin, y4m=False)
         process.stdin.close()
@@ -148,9 +123,8 @@ def get_size(command, clip: vs.VideoNode) -> int:
         process.wait()
         return total_size
     except Exception as e:
-        print(f"Error while running command: {command}\n{e}")
+        print(f"Error while processing clip with FFmpeg\n{e}")
         return 0
-
 
 def get_ranges(scenes):
     ranges = []
