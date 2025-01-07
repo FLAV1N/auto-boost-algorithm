@@ -96,8 +96,8 @@ def calc_grainsynth_of_scene(
     final_grain /= 100.0 / encoder_max_grain
     final_grain = int(round(final_grain))  # Use rounding to avoid truncation
     
-    if final_grain == 0:
-        final_grain = 4 
+    if final_grain <= 3:
+        final_grain = 3 
 
     # Print the final grain value
     # print(f"Chunk {chunk_start}-{chunk_end}: Calculated grain strength {final_grain}")
